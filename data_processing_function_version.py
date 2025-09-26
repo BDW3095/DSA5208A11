@@ -1,0 +1,65 @@
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+columns=["tpep_pickup_datetime","tpep_dropoff_datetime","passenger_count","trip_distance",
+         "RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
+
+file_path=Path("C:/Users/Jacky/Desktop/NUS/Semester 1/DSA5208/Projects/Project 1/nytaxi2022.csv")
+df=pd.read_csv(file_path,usecols=columns,nrows=1000000)
+
+def preprocess_and_split(df):
+    
+    np.random.seed(5208)
+
+    numeric_columns=["duration_min","trip_distance","extra"]
+    categorical_columns=["passenger_count","RatecodeID","PULocationID","DOLocationID","payment_type","pickup_month","pickup_day","pickup_hour"]
+
+    target_column=["total_amount"]
+
+    columns_temp=["passenger_count","trip_distance","RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
+
+    for i in columns_temp:
+        df[i]=pd.to_numeric(df[i],errors="coerce")
+
+    df=df.dropna(subset=columns_temp)
+
+    df=df[df["passenger_count"]>=1]
+    df=df[(df["trip_distance"]>0) & (df["trip_distance"]<500)]
+    df=df[df["extra"]>0]
+    df=df[(df["total_amount"]>0) & (df["total_amount"]<2000)]
+
+    df["tpep_pickup_datetime"]=pd.to_datetime(df["tpep_pickup_datetime"],format="mixed",errors="coerce")
+    df["tpep_dropoff_datetime"]=pd.to_datetime(df["tpep_dropoff_datetime"],format="mixed",errors="coerce")
+
+    df=df.dropna(subset=["tpep_pickup_datetime","tpep_dropoff_datetime"])
+
+    df["pickup_month"]=df["tpep_pickup_datetime"].dt.month.astype("int8")
+    df["pickup_day"]=(df["tpep_pickup_datetime"].dt.dayofweek+1).astype("int8")
+    df["pickup_hour"] =df["tpep_pickup_datetime"].dt.hour.astype("int8")
+    df["duration_min"]=(df["tpep_dropoff_datetime"]-df["tpep_pickup_datetime"]).dt.total_seconds()/60
+
+    df=df.drop(columns=["tpep_pickup_datetime","tpep_dropoff_datetime"])
+
+    df=df[df['pickup_month'].between(1,12)]
+    df=df[df['pickup_day'].between(1,7)]
+    df=df[df['pickup_hour'].between(0,23)]
+    df=df[df["duration_min"]>0]
+
+    X_categorical=pd.get_dummies(df[categorical_columns],dtype="int8")
+    X_numeric=df[numeric_columns].astype("float32")
+
+    X=pd.concat([X_numeric,X_categorical],axis=1)
+    y=df[target_column].astype("float32").to_numpy()
+
+    df_train,df_test=train_test_split(df,test_size=0.3,random_state=5208)
+
+    scaler=StandardScaler()
+    df_train.loc[:,numeric_columns]=scaler.fit_transform(df_train[numeric_columns]).astype("float32")
+    df_test.loc[:,numeric_columns]=scaler.transform(df_test[numeric_columns]).astype("float32")
+
+    return df_train,df_test
+
+df_train,df_test=preprocess_and_split(df)
