@@ -187,12 +187,14 @@ def collectiveRead(fname, comm, nprocs, rank):
             sendData = chunk.to_numpy(dtype=np.float32)
             if r == 0:
                 localData = sendData
-            else:
+            elif r < nprocs:
                 comm.Send([sendData, MPI.FLOAT], r)
+            else:
+                break
     else:
         comm.Recv([localData, MPI.FLOAT], source=0)
     
-    return localData
+    return  localData
 
 def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     """
@@ -244,10 +246,10 @@ def main():
     except:
         raise Exception("Usage: $ mpiexec -np nprocs python3.x SGDfit.py actv width lrate0 lrate1 nrandrows randseed threshold cycle")
 
-    Xtrain = collectiveRead('Xtrain.csv', comm, nprocs, rank)
-    ytrain = collectiveRead('ytrain.csv', comm, nprocs, rank)
-    Xtest  = collectiveRead('Xtest.csv' , comm, nprocs, rank)
-    ytest  = collectiveRead('ytest.csv' , comm, nprocs, rank)
+    Xtrain = collectiveRead('processedData/Xtrain.csv', comm, nprocs, rank)
+    ytrain = collectiveRead('processedData/ytrain.csv', comm, nprocs, rank)
+    Xtest  = collectiveRead('processedData/Xtest.csv' , comm, nprocs, rank)
+    ytest  = collectiveRead('processedData/ytest.csv' , comm, nprocs, rank)
 
     nFeatures =  Xtrain.shape[1]
     nn = nn1Layer(nFeatures, width, actvFName)
