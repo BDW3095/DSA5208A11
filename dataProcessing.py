@@ -7,8 +7,8 @@ from sklearn.preprocessing import StandardScaler
 columns=["tpep_pickup_datetime","tpep_dropoff_datetime","passenger_count","trip_distance",
          "RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
 
-file_path=Path("C:/Users/Jacky/Desktop/NUS/Semester 1/DSA5208/Projects/Project 1/nytaxi2022.csv")
-df=pd.read_csv(file_path,usecols=columns,nrows=1000000)
+file_path=Path("/mnt/d/2025-2026/2025b/DSA5208/Project_1/nytaxi2022.csv")
+df=pd.read_csv(file_path,usecols=columns)
 
 def preprocess_and_split(df):
     
@@ -60,10 +60,10 @@ def preprocess_and_split(df):
     X_train.loc[:,numeric_columns]=scaler.fit_transform(X_train[numeric_columns]).astype("float32")
     X_test.loc[:,numeric_columns]=scaler.transform(X_test[numeric_columns]).astype("float32")
 
-    X_train.to_csv("X_train.csv",index=False)
-    y_train.to_csv("y_train.csv",index=False,header=True)
-    X_test.to_csv("X_test.csv",index=False)
-    y_test.to_csv("y_test.csv",index=False,header=True)
+    X_train.to_csv("processedData/Xtrain.csv",index=False)
+    y_train.to_csv("processedData/ytrain.csv",index=False,header=True)
+    X_test.to_csv("processedData/Xtest.csv",index=False)
+    y_test.to_csv("processedData/ytest.csv",index=False,header=True)
 
     return X_train,y_train,X_test,y_test
 
