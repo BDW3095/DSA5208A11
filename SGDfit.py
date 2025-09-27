@@ -11,7 +11,7 @@ class ActivationFunction:
         self.func = func
         self.grad = grad
 
-b, k = 10, 0.2
+b, k = 10, 0.01
 
 def sigmoid_f(x):
     x = np.clip(x,-b, b)
@@ -20,6 +20,14 @@ def sigmoid_f(x):
 def sigmoid_g(x):
     x = np.clip(x,-b, b)
     return np.exp(-x) / (1 + np.exp(-x)) **2
+
+def softplusf(x):
+    x = np.clip(x,-b, b)
+    return np.log(1+np.exp(x))
+
+def softplusg(x):
+    x = np.clip(x,-b, b)
+    return 1 / (1+ np.exp(-x))
 
 def relu_f(x):
     return np.maximum(x, k *x)
@@ -35,15 +43,15 @@ def tanh_g(x):
 
 ActivationDict = dict()
 
-ActivationDict['sigmoid'] = ActivationFunction(sigmoid_f, sigmoid_g)
-ActivationDict['relu'] =    ActivationFunction(relu_f,  relu_g)
-ActivationDict['tanh'] =    ActivationFunction(tanh_f,  tanh_g)
+ActivationDict['sigmoid' ] = ActivationFunction(sigmoid_f, sigmoid_g)
+ActivationDict['tanh']     = ActivationFunction(tanh_f,  tanh_g)
+ActivationDict['softplus'] = ActivationFunction(softplusf, softplusg)
 
 class nn1Layer():
     
     def __init__(self, nFeatures, width, actvFuncName):
         self.sigma = ActivationDict[actvFuncName]
-        self.isReLU = bool(actvFuncName== 'relu')
+        self.unboundedGrad = bool(actvFuncName in ['softplus'])
         self.width = width
         self.f = nFeatures
         self.w0 = np.zeros((self.f+1, width), dtype=np.float32)
@@ -93,7 +101,7 @@ class nn1Layer():
         np.random.seed()
 
 
-    def fit(self, Xtrain, ytrain, learningRates, M, comm, nprocs, rank, seed, threshold, T, lossTrack=[], gradBound=4):
+    def fit(self, Xtrain, ytrain, learningRates, M, comm, nprocs, rank, seed, threshold, T, lossTrack=[], gradBound=0.2):
         
         localGrad0 = np.zeros(self.w0.shape, dtype=np.float32)
         localGrad1 = np.zeros(self.w1.shape, dtype=np.float32)
@@ -124,8 +132,7 @@ class nn1Layer():
             localGrad0= localGrad0 / M / nprocs
             localGrad1= localGrad1 / M / nprocs
 
-            if self.isReLU:
-                
+            if self.unboundedGrad:
                 localGrad0 = np.clip(localGrad0, -gradBound, gradBound)
                 localGrad1 = np.clip(localGrad1, -gradBound, gradBound)
 
