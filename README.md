@@ -2,7 +2,7 @@
 
 ### Usage (train and predict)
 
-During preprocessing, the data is preprocessed and stored in `processedX.csv`, `processedy.csv` in the current working directory, which will be read by `SDG.py`.
+During preprocessing, the data is preprocessed and stored in `Xtrain.csv`, `ytrain.csv`, `Xtest.csv`, `ytest.csv` in the current working directory, which will be read by `SDG.py`.
 
 `SGDfit.py` first initializes a neural network model with `1` hidden layer, reads the processed data collectively and then performs train-test split. Distributive SGD is applied to train the model on training sets. `main()` function keeps track of training loss `0` and reports test loss. 
 
