@@ -10,41 +10,7 @@ class ActivationFunction:
         self.func = func
         self.grad = grad
 
-b, k = 10, 0.01
-
-def sigmoid_f(x):
-    x = np.clip(x,-b, b)
-    return 1 / (1+ np.exp(-x))
-
-def sigmoid_g(x):
-    x = np.clip(x,-b, b)
-    return np.exp(-x) / (1 + np.exp(-x)) **2
-
-def softplusf(x):
-    x = np.clip(x,-b, b)
-    return np.log(1+np.exp(x))
-
-def softplusg(x):
-    x = np.clip(x,-b, b)
-    return 1 / (1+ np.exp(-x))
-
-def relu_f(x):
-    return np.maximum(x, k *x)
-
-def relu_g(x):
-    return np.piecewise(x, [x<0, x>=0], [k, 1.0])
-
-def tanh_f(x):
-    return np.tanh(x)
-
-def tanh_g(x):
-    return 1 - (np.tanh(x)) **2
-
-ActivationDict = dict()
-
-ActivationDict['sigmoid' ] = ActivationFunction(sigmoid_f, sigmoid_g)
-ActivationDict['tanh']     = ActivationFunction(tanh_f,  tanh_g)
-ActivationDict['softplus'] = ActivationFunction(softplusf, softplusg)
+ActivationDict   = dict()
 
 class nn1Layer():
     
@@ -83,8 +49,8 @@ class nn1Layer():
         mse = None
         if rank == 0:
             mse = np.sum(sst) / X.shape[0] / nprocs
-            # print('{:07.2f}'.format(mse))
-            print(mse)
+            print('{:06.3f}'.format(mse))
+            # print(mse)
         return mse
 
     
@@ -160,7 +126,7 @@ class nn1Layer():
 
 def getnLines(fname):
     with open(fname, 'r') as f:
-        csv_reader = csv.reader(f)
+        csv_reader= csv.reader(f)
         next(csv_reader)
         nLines = sum(1 for _ in csv_reader)
     return nLines
@@ -223,6 +189,41 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
 
     return np.array(lossTrack), nn.calculateLoss(Xtest , ytest , comm, nprocs, rank)
 
+b, k = 10, 0.01
+
+def sigmoid_f(x):
+    x = np.clip(x,-b, b)
+    return 1 / (1+ np.exp(-x))
+
+def sigmoid_g(x):
+    x = np.clip(x,-b, b)
+    return np.exp(-x) / (1 + np.exp(-x)) **2
+
+def softplusf(x):
+    x = np.clip(x,-b, b)
+    return np.log(1+np.exp(x))
+
+def softplusg(x):
+    x = np.clip(x,-b, b)
+    return 1 / (1+ np.exp(-x))
+
+def relu_f(x):
+    return np.maximum(x, k *x)
+
+def relu_g(x):
+    return np.piecewise(x, [x<0, x>=0], [k, 1.0])
+
+def tanh_f(x):
+    return np.tanh(x)
+
+def tanh_g(x):
+    return 1 - (np.tanh(x)) **2
+
+ActivationDict['sigmoid' ] = ActivationFunction(sigmoid_f, sigmoid_g)
+ActivationDict['tanh']     = ActivationFunction(tanh_f,  tanh_g)
+ActivationDict['softplus'] = ActivationFunction(softplusf, softplusg)
+
+
 def main():
 
     comm = MPI.COMM_WORLD
@@ -230,6 +231,7 @@ def main():
     rank   = comm.Get_rank()
 
     args = sys.argv
+    
     try:
         actvFName = str(args[1])
         width     = int(args[2])
@@ -251,10 +253,7 @@ def main():
     Xtest  = collectiveRead('processedData/Xtest.csv' , comm, nprocs, rank)
     ytest  = collectiveRead('processedData/ytest.csv' , comm, nprocs, rank)
 
-    nFeatures =  Xtrain.shape[1]
-    nn = nn1Layer(nFeatures, width, actvFName)
-
-    nn.fit(Xtrain, ytrain, lr, M, comm, nprocs, rank, seed, threshold, T)
+    trainLossHistory, testLoss = trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, args[1:])
 
 if __name__ == '__main__':
 
