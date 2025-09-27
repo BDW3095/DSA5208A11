@@ -17,7 +17,7 @@ def preprocess_and_split(df):
     numeric_columns=["duration_min","trip_distance","extra"]
     categorical_columns=["passenger_count","RatecodeID","PULocationID","DOLocationID","payment_type","pickup_month","pickup_day","pickup_hour"]
 
-    target_column=["total_amount"]
+    target_column="total_amount"
 
     columns_temp=["passenger_count","trip_distance","RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
 
@@ -48,18 +48,23 @@ def preprocess_and_split(df):
     df=df[df['pickup_hour'].between(0,23)]
     df=df[df["duration_min"]>0]
 
-    X_categorical=pd.get_dummies(df[categorical_columns],dtype="int8")
+    X_categorical=pd.get_dummies(df[categorical_columns].astype(str),dtype="int8")
     X_numeric=df[numeric_columns].astype("float32")
 
     X=pd.concat([X_numeric,X_categorical],axis=1)
-    y=df[target_column].astype("float32").to_numpy()
+    y=df[target_column].astype("float32")
 
-    df_train,df_test=train_test_split(df,test_size=0.3,random_state=5208)
+    X_train,X_test,y_train,y_test=train_test_split(X,y,test_size=0.3,random_state=5208)
 
     scaler=StandardScaler()
-    df_train.loc[:,numeric_columns]=scaler.fit_transform(df_train[numeric_columns]).astype("float32")
-    df_test.loc[:,numeric_columns]=scaler.transform(df_test[numeric_columns]).astype("float32")
+    X_train.loc[:,numeric_columns]=scaler.fit_transform(X_train[numeric_columns]).astype("float32")
+    X_test.loc[:,numeric_columns]=scaler.transform(X_test[numeric_columns]).astype("float32")
 
-    return df_train,df_test
+    X_train.to_csv("X_train.csv",index=False)
+    y_train.to_csv("y_train.csv",index=False,header=True)
+    X_test.to_csv("X_test.csv",index=False)
+    y_test.to_csv("y_test.csv",index=False,header=True)
 
-df_train,df_test=preprocess_and_split(df)
+    return X_train,y_train,X_test,y_test
+
+X_train,y_train,X_test,y_test=preprocess_and_split(df)
