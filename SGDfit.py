@@ -4,7 +4,6 @@ import pandas as pd
 import csv
 import sys
 
-from sklearn.model_selection import train_test_split
 
 class ActivationFunction:
     def __init__(self, func, grad):
@@ -195,6 +194,33 @@ def collectiveRead(fname, comm, nprocs, rank):
     
     return localData
 
+def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
+    """
+    Train the data on training data with parameters params, evaluate loss on 
+    test data and returns a tuple: (trainning loss history list, test loss)
+    ([numpy array], [numpy float]) 
+    """
+    # params: [actv, width, lrates, nrandrows, randseed, threshold, cycle]
+    actv      = str(params[0])
+    width     = int(params[1])
+    lr        = float(params[2]), float(params[3])
+    M         = int(params[4])
+    seed = None
+    try: 
+        seed  = int(params[5])
+    except ValueError:
+        pass
+    threshold = float(params[6])
+    T         = int(params[7])
+    nFeatures= Xtrain.shape[1]
+
+    nn = nn1Layer(nFeatures, width, actv)
+    lossTrack = list()
+
+    nn.fit(Xtrain, ytrain, lr, M, comm, nprocs, rank, seed, threshold, T, lossTrack)
+
+    return np.array(lossTrack), nn.calculateLoss(Xtest , ytest , comm, nprocs, rank)
+
 def main():
 
     comm = MPI.COMM_WORLD
@@ -202,31 +228,31 @@ def main():
     rank   = comm.Get_rank()
 
     args = sys.argv
+    try:
+        actvFName = str(args[1])
+        width     = int(args[2])
+        lr        = float(args[3]), float(args[4])
+        M         = int(args[5])
+        seed = None
+        try: 
+            seed  = int(args[6])
+        except ValueError:
+            pass
+        threshold = float(args[7])
 
-    actvFName = str(args[1])
-    width     = int(args[2])
-    lr        = float(args[3]), float(args[4])
-    M         = int(args[5])
-    seed = None
-    try: 
-        seed  = int(args[6])
-    except ValueError:
-        pass
-    threshold = float(args[7])
+        T         = int(args[8])
+    except:
+        raise Exception("Usage: $ mpiexec -np nprocs python3.x SGDfit.py actv width lrate0 lrate1 nrandrows randseed threshold cycle")
 
-    T         = int(args[8])
+    Xtrain = collectiveRead('Xtrain.csv', comm, nprocs, rank)
+    ytrain = collectiveRead('ytrain.csv', comm, nprocs, rank)
+    Xtest  = collectiveRead('Xtest.csv' , comm, nprocs, rank)
+    ytest  = collectiveRead('ytest.csv' , comm, nprocs, rank)
 
-    X = collectiveRead('processedX.csv', comm, nprocs, rank)
-    y = collectiveRead('processedy.csv', comm, nprocs, rank)
-
-    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.30)
-    nFeatures = X.shape[1]
+    nFeatures =  Xtrain.shape[1]
     nn = nn1Layer(nFeatures, width, actvFName)
-    lossTrack = list()
 
-    nn.fit(Xtrain, ytrain, lr, M, comm, nprocs, rank, seed, threshold, T, lossTrack)
-
-    predictionMeanSquareError = nn.calculateLoss(Xtest, ytest, comm, nprocs, rank) # stored only on root 0
+    nn.fit(Xtrain, ytrain, lr, M, comm, nprocs, rank, seed, threshold, T)
 
 if __name__ == '__main__':
 
