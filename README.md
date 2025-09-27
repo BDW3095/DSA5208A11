@@ -6,7 +6,7 @@ During preprocessing, the data is preprocessed and stored in `processedX.csv`, `
 
 `SGDfit.py` first initializes a neural network model with `1` hidden layer, reads the processed data collectively and then performs train-test split. Distributive SGD is applied to train the model on training sets. `main()` function keeps track of training loss `0` and reports test loss. 
 
-On a Linux machine with Open MPI configurated, `SGD.py` runs as follows:
+In a `Python3.x` environment with Open MPI and dependent packages properly configured, `SGDfit.py` runs as follows: 
 
 ```
 $ mpiexec -np nprocs python3.x SGDfit.py actv width lrate0 lrate1 nrandrows randseed threshold cycle
