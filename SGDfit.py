@@ -14,9 +14,9 @@ ActivationDict   = dict()
 
 class nn1Layer():
     
-    def __init__(self, nFeatures, width, actvFuncName):
-        self.sigma = ActivationDict[actvFuncName]
-        self.unboundedGrad = bool(actvFuncName in ['softplus'])
+    def __init__(self, nFeatures, width, actv):
+        self.sigma = ActivationDict[actv]
+        self.unboundedGrad = bool(actv in ['softplus', 'relu'])
         self.width = width
         self.f = nFeatures
         self.w0 = np.zeros((self.f+1, width), dtype=np.float32)
@@ -36,8 +36,7 @@ class nn1Layer():
 
         return yHat
 
-
-    def calculateLoss(self, X, y, comm, nprocs, rank):
+    def calculateLoss(self, comm, nprocs, rank, X, y):
         yDelta = self.forwardBroadcast(X) - y
         sse    = np.zeros(1,  np.float32) 
         sse[0] = np.sum(yDelta **2)
@@ -49,11 +48,9 @@ class nn1Layer():
         mse = None
         if rank == 0:
             mse = np.sum(sst) / X.shape[0] / nprocs
-            print('{:06.3f}'.format(mse))
-            # print(mse)
+            print('{:07.3f}'.format(mse))
         return mse
 
-    
     def initializeWeights(self, comm, rank, seed=None):
         if rank == 0:
             np.random.seed(seed)
@@ -63,10 +60,9 @@ class nn1Layer():
             self.w1[:,:]= np.random.uniform(-bound1, bound1, self.w1.shape)
         comm.Bcast(self.w0, root=0)
         comm.Bcast(self.w1, root=0)
-        np.random.seed()
+        # np.random.seed()
 
-
-    def fit(self, Xtrain, ytrain, learningRates, M, comm, nprocs, rank, seed, threshold, T, lossTrack=[], gradBound=0.2):
+    def fit(self, comm, nprocs, rank, Xtrain, ytrain, learningRates, M, seed, threshold, T, lossTrack=[], gradBound=0.8):
         
         localGrad0 = np.zeros(self.w0.shape, dtype=np.float32)
         localGrad1 = np.zeros(self.w1.shape, dtype=np.float32)
@@ -76,7 +72,7 @@ class nn1Layer():
 
         self.initializeWeights(comm, rank, seed)
 
-        mse = self.calculateLoss(Xtrain, ytrain, comm, nprocs, rank)
+        mse = self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
         if rank == 0:
             lossTrack.append(mse)
         period = 0
@@ -84,6 +80,7 @@ class nn1Layer():
         while not convergence:
             period += 1
             indices= np.random.randint(Xtrain.shape[0], size=M)
+            indices= np.arange(M)
             Xselect, yselect = Xtrain[indices], ytrain[indices]
 
             yDelta= self.forwardBroadcast(Xselect, True, _hiddenLayerRecv, _hiddenLayerActv)- yselect
@@ -94,27 +91,32 @@ class nn1Layer():
             localGrad0[-1,:] = np.matmul(np.transpose(yDelta), hiddenLayerBcast)
             localGrad1[-1,:] = np.sum(yDelta)
 
-            localGrad0= localGrad0 / M / nprocs
-            localGrad1= localGrad1 / M / nprocs
-
-            if self.unboundedGrad:
-                localGrad0 = np.clip(localGrad0, -gradBound, gradBound)
-                localGrad1 = np.clip(localGrad1, -gradBound, gradBound)
+            localGrad0 = localGrad0 / M / nprocs
+            localGrad1 = localGrad1 / M / nprocs
 
             buffer0 = np.empty((nprocs,) +localGrad0.shape, np.float32)
             buffer1 = np.empty((nprocs,) +localGrad1.shape, np.float32)
 
-            comm.Allgather(localGrad0, buffer0)
-            comm.Allgather(localGrad1, buffer1)
+            comm.Allgather(localGrad0 , buffer0)
+            comm.Allgather(localGrad1 , buffer1)
 
-            self.w0-= learningRates[0]* np.sum(buffer0, axis=0)
-            self.w1-= learningRates[1]* np.sum(buffer1, axis=0)
+            totalGrad0 = np.sum(buffer0, axis=0)
+            totalGrad1 = np.sum(buffer1, axis=0)
+
+            if self.unboundedGrad:
+                totalGrad0 = np.clip(totalGrad0, -gradBound, gradBound)
+                totalGrad1 = np.clip(totalGrad1, -gradBound, gradBound)
+
+
+            self.w0-=learningRates[0]*totalGrad0
+            self.w1-=learningRates[1]*totalGrad1
 
             if period == T:
-                mse =self.calculateLoss(Xtrain, ytrain, comm, nprocs, rank)
+
+                mse= self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
 
                 if rank == 0:
-                    if np.abs(lossTrack[-1] - mse) < threshold:
+                    if np.abs(lossTrack[-1]- mse)< threshold:
                         convergence = 1
                     else:
                         lossTrack.append(mse)
@@ -128,14 +130,15 @@ def getnLines(fname):
     with open(fname, 'r') as f:
         csv_reader= csv.reader(f)
         next(csv_reader)
-        nLines = sum(1 for _ in csv_reader)
-    return nLines
+        numOfRows = sum(1 for _ in csv_reader)
+    return numOfRows
 
 def collectiveRead(fname, comm, nprocs, rank):
 
-    numOfLines = getnLines(fname)
+    # numOfRows = getnLines(fname)
+    numOfRows = 100000 # small size to debug
 
-    localSize = int(numOfLines/nprocs)
+    localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
     if rank == 0:
         head= pd.read_csv(fname, nrows=10)
@@ -145,20 +148,21 @@ def collectiveRead(fname, comm, nprocs, rank):
 
 
     localData = np.zeros((localSize,numOfAttributes[0]), dtype=np.float32)
+    sendData  = np.zeros((localSize,numOfAttributes[0]), dtype=np.float32)
 
     if rank == 0:
-        dataChunks = pd.read_csv(fname, chunksize=localSize, index_col=False)
+        dataChunks = pd.read_csv(fname, chunksize=localSize, index_col=False, nrows=numOfRows)
 
         for r, chunk in enumerate(dataChunks):
-            sendData = chunk.to_numpy(dtype=np.float32)
+            sendData[:,:] = chunk.to_numpy(dtype=np.float32)
             if r == 0:
-                localData = sendData
+                localData[:,:] = sendData[:,:]
             elif r < nprocs:
-                comm.Send([sendData, MPI.FLOAT], r)
+                comm.Send(sendData, r)
             else:
                 break
     else:
-        comm.Recv([localData, MPI.FLOAT], source=0)
+        comm.Recv(localData, source=0)
     
     return  localData
 
@@ -168,11 +172,11 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     test data and returns a tuple: (trainning loss history list, test loss)
     ([numpy array], [numpy float]) 
     """
-    # params: [actv, width, lrates, nrandrows, randseed, threshold, cycle]
+    ### params: [actv, width, lrates, nrandrows, randseed, threshold, cycle]
     actv      = str(params[0])
     width     = int(params[1])
     lr        = float(params[2]), float(params[3])
-    M         = int(params[4])
+    M         = int(int(params[4]) / nprocs)
     seed = None
     try: 
         seed  = int(params[5])
@@ -182,12 +186,12 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     T         = int(params[7])
     nFeatures= Xtrain.shape[1]
 
-    nn = nn1Layer(nFeatures, width, actv)
+    nn= nn1Layer(nFeatures, width, actv)
     lossTrack = list()
 
-    nn.fit(Xtrain, ytrain, lr, M, comm, nprocs, rank, seed, threshold, T, lossTrack)
+    nn.fit(comm, nprocs, rank, Xtrain, ytrain, lr, M, seed, threshold, T, lossTrack)
 
-    return np.array(lossTrack), nn.calculateLoss(Xtest , ytest , comm, nprocs, rank)
+    return np.array(lossTrack),   nn.calculateLoss(comm, nprocs, rank, Xtest, ytest)
 
 b, k = 10, 0.01
 
@@ -221,6 +225,7 @@ def tanh_g(x):
 
 ActivationDict['sigmoid' ] = ActivationFunction(sigmoid_f, sigmoid_g)
 ActivationDict['tanh']     = ActivationFunction(tanh_f,  tanh_g)
+ActivationDict['relu']     = ActivationFunction(relu_f,  relu_g)
 ActivationDict['softplus'] = ActivationFunction(softplusf, softplusg)
 
 
@@ -236,7 +241,7 @@ def main():
         actvFName = str(args[1])
         width     = int(args[2])
         lr        = float(args[3]), float(args[4])
-        M         = int(args[5])
+        M         = int(int(args[5]) / nprocs)
         seed = None
         try: 
             seed  = int(args[6])
@@ -247,11 +252,14 @@ def main():
         T         = int(args[8])
     except:
         raise Exception("Usage: $ mpiexec -np nprocs python3.x SGDfit.py actv width lrate0 lrate1 nrandrows randseed threshold cycle")
+    
+    dataDirectory = 'processedData/'
+    # dataDirectory = '/mnt/d/test/25_09/'
 
-    Xtrain = collectiveRead('processedData/Xtrain.csv', comm, nprocs, rank)
-    ytrain = collectiveRead('processedData/ytrain.csv', comm, nprocs, rank)
-    Xtest  = collectiveRead('processedData/Xtest.csv' , comm, nprocs, rank)
-    ytest  = collectiveRead('processedData/ytest.csv' , comm, nprocs, rank)
+    Xtrain = collectiveRead(dataDirectory+'Xtrain.csv', comm, nprocs, rank)
+    ytrain = collectiveRead(dataDirectory+'ytrain.csv', comm, nprocs, rank)
+    Xtest  = collectiveRead(dataDirectory+'Xtest.csv' , comm, nprocs, rank)
+    ytest  = collectiveRead(dataDirectory+'ytest.csv' , comm, nprocs, rank)
 
     trainLossHistory, testLoss = trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, args[1:])
 
