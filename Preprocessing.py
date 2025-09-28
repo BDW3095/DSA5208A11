@@ -19,17 +19,17 @@ def preprocess_and_split(df):
 
     target_column="total_amount"
 
-    columns_temp=["passenger_count","trip_distance","RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
+    top_pairs=df.groupby(["PULocationID","DOLocationID"]).size().nlargest(500).index
+    df=df[df.set_index(["PULocationID","DOLocationID"]).index.isin(top_pairs)].reset_index(drop=True)
 
-    for i in columns_temp:
-        df[i]=pd.to_numeric(df[i],errors="coerce")
+    df=df[df["passenger_count"]==1]
+    df=df[(df["trip_distance"]>0) & (df["trip_distance"]<=20)]
+    df=df[df["RatecodeID"]==1]
+    df=df[df["payment_type"]==1]
+    df=df[df["extra"]>=0]
+    df=df[(df["total_amount"]>0) & (df["total_amount"]<=100)]
 
-    df=df.dropna(subset=columns_temp)
-
-    df=df[df["passenger_count"]>=1]
-    df=df[(df["trip_distance"]>0) & (df["trip_distance"]<500)]
-    df=df[df["extra"]>0]
-    df=df[(df["total_amount"]>0) & (df["total_amount"]<2000)]
+    df=df.drop_duplicates(subset=["tpep_pickup_datetime","tpep_dropoff_datetime","PULocationID","DOLocationID","trip_distance","total_amount"])
 
     df["tpep_pickup_datetime"]=pd.to_datetime(df["tpep_pickup_datetime"],format="mixed",errors="coerce")
     df["tpep_dropoff_datetime"]=pd.to_datetime(df["tpep_dropoff_datetime"],format="mixed",errors="coerce")
@@ -43,10 +43,8 @@ def preprocess_and_split(df):
 
     df=df.drop(columns=["tpep_pickup_datetime","tpep_dropoff_datetime"])
 
-    df=df[df['pickup_month'].between(1,12)]
-    df=df[df['pickup_day'].between(1,7)]
-    df=df[df['pickup_hour'].between(0,23)]
-    df=df[df["duration_min"]>0]
+    df=df[(df['pickup_month'].between(1,12)) & (df['pickup_day'].between(1,7)) & (df['pickup_hour'].between(0,23))]
+    df=df[(df["duration_min"]>0) & (df["duration_min"]<=60)]
 
     X_categorical=pd.get_dummies(df[categorical_columns].astype(str),dtype="int8")
     X_numeric=df[numeric_columns].astype("float32")
@@ -60,11 +58,12 @@ def preprocess_and_split(df):
     X_train.loc[:,numeric_columns]=scaler.fit_transform(X_train[numeric_columns]).astype("float32")
     X_test.loc[:,numeric_columns]=scaler.transform(X_test[numeric_columns]).astype("float32")
 
-    X_train.to_csv("processedData/Xtrain.csv",index=False)
-    y_train.to_csv("processedData/ytrain.csv",index=False,header=True)
-    X_test.to_csv("processedData/Xtest.csv",index=False)
-    y_test.to_csv("processedData/ytest.csv",index=False,header=True)
+    X_train.to_csv("X_train.csv",index=False)
+    y_train.to_csv("y_train.csv",index=False,header=True)
+    X_test.to_csv("X_test.csv",index=False)
+    y_test.to_csv("y_test.csv",index=False,header=True)
 
     return X_train,y_train,X_test,y_test
 
 X_train,y_train,X_test,y_test=preprocess_and_split(df)
+
