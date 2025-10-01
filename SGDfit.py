@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import numpy  as np
 import pandas as pd
+import time
 import csv
 import sys
 
@@ -15,6 +16,7 @@ ActivationDict   = dict()
 class nn1Layer():
     
     def __init__(self, nFeatures, width, actv):
+        """Initialize the neural network with input & hidden size and the type of activation function. """
         self.sigma = ActivationDict[actv]
         self.unboundedGrad = bool(actv in ['softplus', 'relu'])
         self.width = width
@@ -23,6 +25,7 @@ class nn1Layer():
         self.w1 = np.zeros((width+1, 1),      dtype=np.float32)
 
     def forwardBroadcast(self, X, fit=False, _hiddenLayerRecv=None, _hiddenLayerActv=None):
+        """Broadcast data X through the network while keeping track of middle values when 'fit' is set to 'True'"""
         nRows = X.shape[0]
         yHat = np.zeros((nRows, 1), dtype=np.float32)
 
@@ -37,6 +40,10 @@ class nn1Layer():
         return yHat
 
     def calculateLoss(self, comm, nprocs, rank, X, y):
+        """
+        Input: comm configs, data X, data y;
+        Return the loss of current neural network on set (X, y)
+        """
         yDelta = self.forwardBroadcast(X) - y
         sse    = np.zeros(1,  np.float32) 
         sse[0] = np.sum(yDelta **2)
@@ -52,6 +59,9 @@ class nn1Layer():
         return mse
 
     def initializeWeights(self, comm, rank, seed=None):
+        """
+        Initialize the weights of the neural network with normalized Xavier initialization. 
+        """
         if rank == 0:
             np.random.seed(seed)
             bound0 = np.sqrt(6 / (self.f+ self.width))
@@ -60,10 +70,18 @@ class nn1Layer():
             self.w1[:,:]= np.random.uniform(-bound1, bound1, self.w1.shape)
         comm.Bcast(self.w0, root=0)
         comm.Bcast(self.w1, root=0)
-        # np.random.seed()
+        np.random.seed()
 
-    def fit(self, comm, nprocs, rank, Xtrain, ytrain, learningRates, M, seed, threshold, T, lossTrack=[], gradBound=0.8):
-        
+    def fit(self, comm, nprocs, rank, Xtrain, ytrain, learningRates, M, seed, threshold, cycle ,
+            timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=0.3, gradBound=0.8):
+        """
+        Train the model with SGD and store loss history & training time to references passed in. 
+        Input: comm configs, training set, learning rates, width, initial params random seed, 
+               terminate threshold, mse record cycle, reference (size-2-array) to store training
+               times, reference (list) to store training history, target mse whose first-reached 
+               training time will be recorded in pos 0 of the size-2-array. 
+        Return: None
+        """
         localGrad0 = np.zeros(self.w0.shape, dtype=np.float32)
         localGrad1 = np.zeros(self.w1.shape, dtype=np.float32)
 
@@ -75,10 +93,15 @@ class nn1Layer():
         mse = self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
         if rank == 0:
             lossTrack.append(mse)
-        period = 0
+        t = 0
         convergence = 0
+        timeRecorded= 0
+        timeStart= time.time()
+        timeTerminate= float()
+        timeTargetMSE= float()
+
         while not convergence:
-            period += 1
+            t += 1
             indices= np.random.randint(Xtrain.shape[0], size=M)
             indices= np.arange(M)
             Xselect, yselect = Xtrain[indices], ytrain[indices]
@@ -111,22 +134,30 @@ class nn1Layer():
             self.w0-=learningRates[0]*totalGrad0
             self.w1-=learningRates[1]*totalGrad1
 
-            if period == T:
+            if t == cycle:
 
                 mse= self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
 
                 if rank == 0:
                     if np.abs(lossTrack[-1]- mse)< threshold:
                         convergence = 1
+                    if not timeRecorded:
+                        if mse< timestampMse:
+                            timeRecorded =  1
+                            timestampMse = time.time()
                     else:
                         lossTrack.append(mse)
                 convergence = comm.bcast(convergence, root=0)
 
-                period = 0
+                t = 0
+        
+        timeElapsed[0]= timeTargetMSE- timeStart
+        timeElapsed[1]= timeTerminate- timeStart
         
         return None
 
 def getnLines(fname):
+    """Get num of rows of large .csv files"""
     with open(fname, 'r') as f:
         csv_reader= csv.reader(f)
         next(csv_reader)
@@ -134,9 +165,11 @@ def getnLines(fname):
     return numOfRows
 
 def collectiveRead(fname, comm, nprocs, rank):
-
+    """
+    Read in large .csv numerical data files collectively. 
+    """
     # numOfRows = getnLines(fname)
-    numOfRows = 100000 # small size to debug
+    numOfRows = 700000 # small size to debug
 
     localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
@@ -168,9 +201,8 @@ def collectiveRead(fname, comm, nprocs, rank):
 
 def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     """
-    Train the data on training data with parameters params, evaluate loss on 
-    test data and returns a tuple: (trainning loss history list, test loss)
-    ([numpy array], [numpy float]) 
+    Train the model on training data with parameters params, evaluate loss on test data and returns a tuple 
+    (trainning loss history list, test loss, train time) as   ([numpy array], [numpy float], [numpy array]) 
     """
     ### params: [actv, width, lrates, nrandrows, randseed, threshold, cycle]
     actv      = str(params[0])
@@ -187,11 +219,13 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     nFeatures= Xtrain.shape[1]
 
     nn= nn1Layer(nFeatures, width, actv)
+    timeElapsed= np.empty(2, np.float32)
     lossTrack = list()
 
-    nn.fit(comm, nprocs, rank, Xtrain, ytrain, lr, M, seed, threshold, T, lossTrack)
 
-    return np.array(lossTrack),   nn.calculateLoss(comm, nprocs, rank, Xtest, ytest)
+    nn.fit(comm, nprocs, rank, Xtrain, ytrain, lr, M, seed, threshold, T, timeElapsed, lossTrack)
+
+    return np.array(lossTrack) , nn.calculateLoss(comm, nprocs, rank, Xtest, ytest) , timeElapsed
 
 b, k = 10, 0.01
 
@@ -261,7 +295,7 @@ def main():
     Xtest  = collectiveRead(dataDirectory+'Xtest.csv' , comm, nprocs, rank)
     ytest  = collectiveRead(dataDirectory+'ytest.csv' , comm, nprocs, rank)
 
-    trainLossHistory, testLoss = trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, args[1:])
+    trainLossHistory, testLoss, trainTime = trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, args[1:])
 
 if __name__ == '__main__':
 
