@@ -38,8 +38,8 @@ class nn1Layer():
             _hiddenLayerActv = np.zeros((nRows, self.hDim), dtype=np.float32)
 
         _hiddenLayerRecv[:,:]= np.matmul(X, self.w0[:self.iDim,:])+ self.w0[-1,:]
-        _hiddenLayerActv[:,:] = self.sigma.func(_hiddenLayerRecv)
-        yHat[:]= np.matmul(_hiddenLayerActv, self.w1[:self.hDim])+self.w1[-1]
+        _hiddenLayerActv[:,:]= self.sigma.func(_hiddenLayerRecv)
+        yHat[:] = np.matmul(_hiddenLayerActv, self.w1[:self.hDim])+ self.w1[-1,:]
 
         return yHat
 
@@ -47,19 +47,18 @@ class nn1Layer():
         """
         Input: data X, data y. Return the loss of current network. 
         """
-        yDelta = self.forwardBroadcast(X)- y
-        sse    = np.zeros(1,  np.float32) 
-        sse[0] = np.sum(yDelta **2)
+        yDelta= self.forwardBroadcast(X) - y
+        sse = np.zeros(1, np.float32) 
+        sse[0] = np.sum(yDelta**2)
         sst = None
-        self.comm.Barrier()
         if self.rank == 0:
             sst = np.empty(self.nprocs, np.float32)
-        self.comm.Gather(sse, sst, root= 0)
+        self.comm.Gather(sse, sst, root=0)
         
         mse = None
         if self.rank == 0:
             mse = np.sum(sst) / X.shape[0]/ self.nprocs
-            print('{:07.3f}'.format(mse))
+            print('{:07.5f}'.format(mse))
         return mse
 
     def initializeWeights(self, seed=None):
@@ -114,7 +113,7 @@ class nn1Layer():
 
         return  grad0 , grad1
 
-    def fit(self, Xtrain, ytrain, learningRates, batchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=0.3):
+    def fit(self, Xtrain, ytrain, learningRates, batchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=3.0):
         """
         Train the model with SGD and store loss history & training time to references passed in. 
         Input: comm configs, training set, learning rates, width, initial params random seed, 
@@ -134,43 +133,50 @@ class nn1Layer():
         if self.rank == 0:
             lossTrack.append(initmse)
 
+        s = 0
         t = 0
+        l =16
+        tolerance = int(l *threshold)
         convergence = 0
         timeRecorded= 0
-        timeStart= time.time()
-        timeTerminate= float()
-        timeTargetMSE= float()
+        timeStart = time.time()
+        timeTerminate = float()
+        timeTargetMSE = float()
+
+        monoIndicator = np.zeros(l , np.int8)
 
         while not convergence:
             t += 1
 
             grad0[:,:], grad1[:,:] = self.stochasticGradient(Xtrain, ytrain, batchSize)
 
-            self.w0 -= learningRates[0] * grad0
-            self.w1 -= learningRates[1] * grad1
-
-            # print(np.average(grad0**2), np.average(grad1**2))
+            self.w0-= learningRates[0]* grad0
+            self.w1-= learningRates[1]* grad1
 
             if t == cycle:
 
-                mse=self.calculateLoss(Xtrain, ytrain)
+                mse =  self.calculateLoss(Xtrain, ytrain)
                 if self.rank == 0:
-                    if np.abs(lossTrack[-1] - mse) < threshold:
+                    monoIndicator[s] = lossTrack[-1]<=mse
+                    s = (s+1) % l
+                    if np.sum(monoIndicator)>= tolerance:
                         convergence = 1
-                        convergence = self.comm.bcast(convergence, root=0)
+                    else:
+                        lossTrack.append(mse)
+
                     if not timeRecorded:
                         if mse< timestampMse:
                             timeRecorded =  1
                             timestampMse = time.time()
-                    else:
-                        lossTrack.append(mse)
 
                 t = 0
-        
-        timeElapsed[0]= timeTargetMSE- timeStart
-        timeElapsed[1]= timeTerminate- timeStart
-        
-        return None
+                convergence= self.comm.bcast(convergence, root=0)
+
+        if self.rank == 0:
+            timeElapsed[0] = timeTargetMSE - timeStart
+            timeElapsed[1] = timeTerminate - timeStart
+            
+        return   None
 
 def getnLines(fname):
     """Get num of rows of large .csv files"""
@@ -185,7 +191,7 @@ def collectiveRead(fname, comm, nprocs, rank):
     Read in large .csv numerical data files collectively. 
     """
     # numOfRows = getnLines(fname)
-    numOfRows = 70000 # small size to debug
+    numOfRows = 700000 # small size to debug
 
     localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
@@ -222,26 +228,26 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     """
     ### params: [actv, width, lrates, nrandrows, randseed, threshold, cycle]
     actv      = str(params[0])
-    width     = int(params[1])
+    hiddenDim = int(params[1])
     lr        = float(params[2]), float(params[3])
-    M         = int(int(params[4]) / nprocs)
+    batchSize = int(int(params[4]) / nprocs)
     seed = None
     try: 
         seed  = int(params[5])
     except ValueError:
         pass
     threshold = float(params[6])
-    T         = int(params[7])
-    nFeatures= Xtrain.shape[1]
+    mseCycle  = int(params[7])
+    inputDim  = Xtrain .shape[1]
 
-    nn= nn1Layer(comm, nprocs, rank, nFeatures, width, actv)
-    timeElapsed= np.empty(2, np.float32)
+    nn  = nn1Layer(comm, nprocs, rank, inputDim, hiddenDim, actv)
+    timeElapsed = np.empty(2, np.float32)
     lossTrack = list()
 
+    nn.fit(Xtrain, ytrain, lr, batchSize, seed, threshold, mseCycle, timeElapsed, lossTrack)
 
-    nn.fit(Xtrain, ytrain, lr, M, seed, threshold, T, timeElapsed, lossTrack)
 
-    return np.array(lossTrack) , nn.calculateLoss(comm, nprocs, rank, Xtest, ytest) , timeElapsed
+    return lossTrack, nn.calculateLoss(Xtest, ytest), timeElapsed
 
 b, k = 10, 0.01
 
@@ -286,23 +292,7 @@ def main():
     rank   = comm.Get_rank()
 
     args = sys.argv
-    
-    try:
-        actvFName = str(args[1])
-        width     = int(args[2])
-        lr        = float(args[3]), float(args[4])
-        M         = int(int(args[5]) / nprocs)
-        seed = None
-        try: 
-            seed  = int(args[6])
-        except ValueError:
-            pass
-        threshold = float(args[7])
-
-        T         = int(args[8])
-    except:
-        raise Exception("Usage: $ mpiexec -np nprocs python3.x SGDfit.py actv width lrate0 lrate1 nrandrows randseed threshold cycle")
-    
+     
     dataDirectory = 'processedData/'
     # dataDirectory = '/mnt/d/test/25_09/'
 
