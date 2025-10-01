@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 columns=["tpep_pickup_datetime","tpep_dropoff_datetime","passenger_count","trip_distance",
          "RatecodeID","PULocationID","DOLocationID","payment_type","extra","total_amount"]
 
-file_path=Path("/mnt/d/2025-2026/2025b/DSA5208/Project_1/nytaxi2022.csv")
+file_path=Path("./nytaxi2022.csv")
 out_path="./processedData/"
 df=pd.read_csv(file_path,usecols=columns)
 
