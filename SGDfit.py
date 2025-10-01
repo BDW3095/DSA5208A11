@@ -166,11 +166,13 @@ class nn1Layer():
 
                     if not timeRecorded:
                         if mse< timestampMse:
-                            timeRecorded =  1
-                            timestampMse = time.time()
+                            timeRecorded  = 1
+                            timeTargetMSE = time.time()
 
                 t = 0
                 convergence= self.comm.bcast(convergence, root=0)
+
+        timeTerminate = time.time()
 
         if self.rank == 0:
             timeElapsed[0] = timeTargetMSE - timeStart
@@ -191,7 +193,7 @@ def collectiveRead(fname, comm, nprocs, rank):
     Read in large .csv numerical data files collectively. 
     """
     # numOfRows = getnLines(fname)
-    numOfRows = 700000 # small size to debug
+    numOfRows = 70000 # small size to debug
 
     localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
