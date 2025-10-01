@@ -183,17 +183,19 @@ class nn1Layer():
 def getnLines(fname):
     """Get num of rows of large .csv files"""
     with open(fname, 'r') as f:
-        csv_reader= csv.reader(f)
+        csv_reader = csv.reader(f)
         next(csv_reader)
         numOfRows = sum(1 for _ in csv_reader)
     return numOfRows
 
-def collectiveRead(fname, comm, nprocs, rank):
+def collectiveRead(fname, comm, nprocs, rank, rowLimit=None):
     """
-    Read in large .csv numerical data files collectively. 
+    Load large .csv numerical data files collectively. 
     """
-    # numOfRows = getnLines(fname)
-    numOfRows = 70000 # small size to debug
+    if rowLimit is None:
+          numOfRows = getnLines(fname)
+    else:
+          numOfRows = rowLimit
 
     localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
