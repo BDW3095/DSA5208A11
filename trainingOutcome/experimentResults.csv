@@ -1,0 +1,2 @@
+,activation function,hidden dimension,batch size,training RMSE,testing RMSE,time 1,time 2,seed
+0,relu,16,32,1.5983894,1.6321925,0.5217953,2.7010496,5208
