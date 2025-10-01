@@ -5,13 +5,13 @@ comm = MPI.COMM_WORLD
 nprocs = comm.Get_size()
 rank   = comm.Get_rank()
 
-actvList  = ["relu", "tanh", "sigmoid"]
-batchSizeList = [32, 64, 128, 256, 512, 1024]
-hiddenDimList = [32, 64, 128, 256, 512]
+# actvList  = ["relu", "tanh", "sigmoid"]
+# batchSizeList = [32, 64, 128, 256, 512, 1024]
+# hiddenDimList = [32, 64, 128, 256, 512]
 
-# actvList = ["relu"]
-# batchSizeList = [32]
-# hiddenDimList = [16]
+actvList = ["relu"]
+batchSizeList = [32]
+hiddenDimList = [16]
 
 dfResult = None
 lossHistoryDict = dict()
@@ -46,12 +46,14 @@ for actv in actvList:
 inputDirectory  =  './processedData/'
 outputDirectory =  './trainingOutcome/'
 
+rowLimit = None
+
 if __name__ == '__main__':
 
-    Xtrain = collectiveRead(inputDirectory+'Xtrain.csv', comm, nprocs, rank)#, rowLimit=70000)
-    ytrain = collectiveRead(inputDirectory+'ytrain.csv', comm, nprocs, rank)#, 70000)
-    Xtest  = collectiveRead(inputDirectory+'Xtest.csv' , comm, nprocs, rank)#, 30000)
-    ytest  = collectiveRead(inputDirectory+'ytest.csv' , comm, nprocs, rank)#, 30000)
+    Xtrain = collectiveRead(inputDirectory+'Xtrain.csv', comm, nprocs, rank, rowLimit)
+    ytrain = collectiveRead(inputDirectory+'ytrain.csv', comm, nprocs, rank, rowLimit)
+    Xtest  = collectiveRead(inputDirectory+'Xtest.csv' , comm, nprocs, rank, rowLimit)
+    ytest  = collectiveRead(inputDirectory+'ytest.csv' , comm, nprocs, rank, rowLimit)
 
 
     for i, par in enumerate(paramList):
@@ -75,5 +77,7 @@ if __name__ == '__main__':
 
         with open(outputDirectory+"lossHistory.json", "w") as fh:
             json.dump(lossHistoryDict, fh)
+        with open(outputDirectory+"paramList.json"  , "w") as fh:
+            json.dump(paramList      , fh)
 
         dfResult.to_csv(outputDirectory+ "experimentResults.csv")
