@@ -15,14 +15,18 @@ ActivationDict   = dict()
 
 class nn1Layer():
     
-    def __init__(self, nFeatures, width, actv):
+    def __init__(self, comm, nprocs, rank, inputDim, hiddenDim, actv):
         """Initialize the neural network with input & hidden size and the type of activation function. """
         self.sigma = ActivationDict[actv]
+        self.comm = comm
+        self.nprocs = nprocs
+        self.rank = rank
         self.unboundedGrad = bool(actv in ['softplus', 'relu'])
-        self.width = width
-        self.f = nFeatures
-        self.w0 = np.zeros((self.f+1, width), dtype=np.float32)
-        self.w1 = np.zeros((width+1, 1),      dtype=np.float32)
+        self.hDim =hiddenDim
+        self.iDim = inputDim
+
+        self.w0 = np.zeros((self.iDim+1, self.hDim), dtype=np.float32)
+        self.w1 = np.zeros((self.hDim+1, 1),         dtype=np.float32)
 
     def forwardBroadcast(self, X, fit=False, _hiddenLayerRecv=None, _hiddenLayerActv=None):
         """Broadcast data X through the network while keeping track of middle values when 'fit' is set to 'True'"""
@@ -30,50 +34,87 @@ class nn1Layer():
         yHat = np.zeros((nRows, 1), dtype=np.float32)
 
         if not fit:
-            _hiddenLayerRecv = np.zeros((nRows, self.width), dtype=np.float32)
-            _hiddenLayerActv = np.zeros((nRows, self.width), dtype=np.float32)
+            _hiddenLayerRecv = np.zeros((nRows, self.hDim), dtype=np.float32)
+            _hiddenLayerActv = np.zeros((nRows, self.hDim), dtype=np.float32)
 
-        _hiddenLayerRecv[:,:]= np.matmul(X, self.w0[:self.f,:])+ self.w0[-1,:]
+        _hiddenLayerRecv[:,:]= np.matmul(X, self.w0[:self.iDim,:])+ self.w0[-1,:]
         _hiddenLayerActv[:,:] = self.sigma.func(_hiddenLayerRecv)
-        yHat[:]= np.matmul(_hiddenLayerActv, self.w1[:self.width])+self.w1[-1]
+        yHat[:]= np.matmul(_hiddenLayerActv, self.w1[:self.hDim])+self.w1[-1]
 
         return yHat
 
-    def calculateLoss(self, comm, nprocs, rank, X, y):
+    def calculateLoss(self, X, y):
         """
-        Input: comm configs, data X, data y;
-        Return the loss of current neural network on set (X, y)
+        Input: data X, data y. Return the loss of current network. 
         """
-        yDelta = self.forwardBroadcast(X) - y
+        yDelta = self.forwardBroadcast(X)- y
         sse    = np.zeros(1,  np.float32) 
         sse[0] = np.sum(yDelta **2)
         sst = None
-        comm.Barrier()
-        if rank == 0:
-            sst =np.empty(nprocs, np.float32)
-        comm.Gather(sse, sst, root= 0)
+        self.comm.Barrier()
+        if self.rank == 0:
+            sst = np.empty(self.nprocs, np.float32)
+        self.comm.Gather(sse, sst, root= 0)
+        
         mse = None
-        if rank == 0:
-            mse = np.sum(sst) / X.shape[0] / nprocs
+        if self.rank == 0:
+            mse = np.sum(sst) / X.shape[0]/ self.nprocs
             print('{:07.3f}'.format(mse))
         return mse
 
-    def initializeWeights(self, comm, rank, seed=None):
+    def initializeWeights(self, seed=None):
         """
         Initialize the weights of the neural network with normalized Xavier initialization. 
         """
-        if rank == 0:
+        if self.rank == 0:
             np.random.seed(seed)
-            bound0 = np.sqrt(6 / (self.f+ self.width))
-            bound1 = np.sqrt(6 / (self.width+ 1))
+            bound0 = np.sqrt(6 / (self.iDim+ self.hDim))
+            bound1 = np.sqrt(6 / (self.hDim+ 1))
             self.w0[:,:]= np.random.uniform(-bound0, bound0, self.w0.shape)
             self.w1[:,:]= np.random.uniform(-bound1, bound1, self.w1.shape)
-        comm.Bcast(self.w0, root=0)
-        comm.Bcast(self.w1, root=0)
+        self.comm.Bcast(self.w0, root=0)
+        self.comm.Bcast(self.w1, root=0)
         np.random.seed()
 
-    def fit(self, comm, nprocs, rank, Xtrain, ytrain, learningRates, M, seed, threshold, cycle ,
-            timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=0.3, gradBound=0.8):
+    def stochasticGradient(self, Xtrain, ytrain, batchSize , gradBound=20):
+
+        localGrad0 = np.zeros(self.w0.shape, dtype=np.float32)
+        localGrad1 = np.zeros(self.w1.shape, dtype=np.float32)
+
+        idx=np.random.randint(Xtrain.shape[0], size=batchSize)
+        Xselect, yselect= Xtrain[idx], ytrain[idx]
+
+        _hLayerRecv= np.zeros((batchSize,self.hDim), dtype=np.float32)
+        _hLayerActv= np.zeros((batchSize,self.hDim), dtype=np.float32)
+
+        yDelta = self.forwardBroadcast(Xselect, True, _hLayerRecv, _hLayerActv)- yselect
+        hLayerBcast =   np.transpose(self.w1[:self.hDim]) * self.sigma.grad(_hLayerRecv)
+
+        localGrad0[:self.iDim,:] = np.matmul(np.transpose(yDelta* Xselect), hLayerBcast)
+        localGrad1[:self.hDim,:] = np.matmul(np.transpose(_hLayerActv), yDelta)
+        localGrad0[-1,:] = np.matmul(np.transpose(yDelta), hLayerBcast)
+        localGrad1[-1,:] = np.sum(yDelta)
+
+        localGrad0= localGrad0/ batchSize
+        localGrad1= localGrad1/ batchSize
+
+        buffer0 = np.empty((self.nprocs,)+localGrad0.shape, np.float32)
+        buffer1 = np.empty((self.nprocs,)+localGrad1.shape, np.float32)
+
+        self.comm.Allgather(localGrad0, buffer0)
+        self.comm.Allgather(localGrad1, buffer1)
+
+        grad0 =np.sum(buffer0, axis=0) /self.nprocs
+        grad1 =np.sum(buffer1, axis=0) /self.nprocs
+
+        if self.unboundedGrad:
+
+            grad0 = np.clip(grad0,-gradBound, gradBound)
+            grad1 = np.clip(grad1,-gradBound, gradBound)
+
+        return  grad0 , grad1
+
+    def fit(self, Xtrain, ytrain, learningRates, batchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=0.3):
         """
         Train the model with SGD and store loss history & training time to references passed in. 
         Input: comm configs, training set, learning rates, width, initial params random seed, 
@@ -82,17 +123,17 @@ class nn1Layer():
                training time will be recorded in pos 0 of the size-2-array. 
         Return: None
         """
-        localGrad0 = np.zeros(self.w0.shape, dtype=np.float32)
-        localGrad1 = np.zeros(self.w1.shape, dtype=np.float32)
+        
+        self.initializeWeights( seed)
 
-        _hiddenLayerRecv= np.zeros((M,self.width), dtype=np.float32)
-        _hiddenLayerActv= np.zeros((M,self.width), dtype=np.float32)
+        grad0 = np.zeros(self.w0.shape, dtype=np.float32)
+        grad1 = np.zeros(self.w1.shape, dtype=np.float32)
 
-        self.initializeWeights(comm, rank, seed)
+        initmse = self.calculateLoss(Xtrain, ytrain)
 
-        mse = self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
-        if rank == 0:
-            lossTrack.append(mse)
+        if self.rank == 0:
+            lossTrack.append(initmse)
+
         t = 0
         convergence = 0
         timeRecorded= 0
@@ -102,52 +143,27 @@ class nn1Layer():
 
         while not convergence:
             t += 1
-            indices= np.random.randint(Xtrain.shape[0], size=M)
-            indices= np.arange(M)
-            Xselect, yselect = Xtrain[indices], ytrain[indices]
 
-            yDelta= self.forwardBroadcast(Xselect, True, _hiddenLayerRecv, _hiddenLayerActv)- yselect
+            grad0[:,:], grad1[:,:] = self.stochasticGradient(Xtrain, ytrain, batchSize)
 
-            hiddenLayerBcast = np.transpose(self.w1[:self.width]) * self.sigma.grad(_hiddenLayerRecv)
-            localGrad0[:self.f,:] = np.matmul(np.transpose(yDelta * Xselect), hiddenLayerBcast)
-            localGrad1[:self.width,:]= np.matmul(np.transpose(_hiddenLayerActv), yDelta)
-            localGrad0[-1,:] = np.matmul(np.transpose(yDelta), hiddenLayerBcast)
-            localGrad1[-1,:] = np.sum(yDelta)
+            self.w0 -= learningRates[0] * grad0
+            self.w1 -= learningRates[1] * grad1
 
-            localGrad0 = localGrad0 / M / nprocs
-            localGrad1 = localGrad1 / M / nprocs
-
-            buffer0 = np.empty((nprocs,) +localGrad0.shape, np.float32)
-            buffer1 = np.empty((nprocs,) +localGrad1.shape, np.float32)
-
-            comm.Allgather(localGrad0 , buffer0)
-            comm.Allgather(localGrad1 , buffer1)
-
-            totalGrad0 = np.sum(buffer0, axis=0)
-            totalGrad1 = np.sum(buffer1, axis=0)
-
-            if self.unboundedGrad:
-                totalGrad0 = np.clip(totalGrad0, -gradBound, gradBound)
-                totalGrad1 = np.clip(totalGrad1, -gradBound, gradBound)
-
-
-            self.w0-=learningRates[0]*totalGrad0
-            self.w1-=learningRates[1]*totalGrad1
+            # print(np.average(grad0**2), np.average(grad1**2))
 
             if t == cycle:
 
-                mse= self.calculateLoss(comm, nprocs, rank, Xtrain, ytrain)
-
-                if rank == 0:
-                    if np.abs(lossTrack[-1]- mse)< threshold:
+                mse=self.calculateLoss(Xtrain, ytrain)
+                if self.rank == 0:
+                    if np.abs(lossTrack[-1] - mse) < threshold:
                         convergence = 1
+                        convergence = self.comm.bcast(convergence, root=0)
                     if not timeRecorded:
                         if mse< timestampMse:
                             timeRecorded =  1
                             timestampMse = time.time()
                     else:
                         lossTrack.append(mse)
-                convergence = comm.bcast(convergence, root=0)
 
                 t = 0
         
@@ -169,7 +185,7 @@ def collectiveRead(fname, comm, nprocs, rank):
     Read in large .csv numerical data files collectively. 
     """
     # numOfRows = getnLines(fname)
-    numOfRows = 700000 # small size to debug
+    numOfRows = 70000 # small size to debug
 
     localSize = int(numOfRows/ nprocs)
     numOfAttributes = np.empty(1, 'i')
@@ -218,12 +234,12 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     T         = int(params[7])
     nFeatures= Xtrain.shape[1]
 
-    nn= nn1Layer(nFeatures, width, actv)
+    nn= nn1Layer(comm, nprocs, rank, nFeatures, width, actv)
     timeElapsed= np.empty(2, np.float32)
     lossTrack = list()
 
 
-    nn.fit(comm, nprocs, rank, Xtrain, ytrain, lr, M, seed, threshold, T, timeElapsed, lossTrack)
+    nn.fit(Xtrain, ytrain, lr, M, seed, threshold, T, timeElapsed, lossTrack)
 
     return np.array(lossTrack) , nn.calculateLoss(comm, nprocs, rank, Xtest, ytest) , timeElapsed
 
