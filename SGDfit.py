@@ -213,13 +213,14 @@ def collectiveRead(fname, comm, nprocs, rank, rowLimit=None):
         dataChunks = pd.read_csv(fname, chunksize=localSize, index_col=False, nrows=numOfRows)
 
         for r, chunk in enumerate(dataChunks):
+            if r == nprocs:
+                break
+
             sendData[:,:] = chunk.to_numpy(dtype=np.float32)
             if r == 0:
                 localData[:,:] = sendData[:,:]
-            elif r < nprocs:
-                comm.Send(sendData, r)
             else:
-                break
+                comm.Send(sendData, r)
     else:
         comm.Recv(localData, source=0)
     
