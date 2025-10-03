@@ -23,9 +23,6 @@ def preprocess_and_split(df):
     top_pairs=df.groupby(["PULocationID","DOLocationID"]).size().nlargest(500).index
     df=df[df.set_index(["PULocationID","DOLocationID"]).index.isin(top_pairs)].reset_index(drop=True)
 
-    top_pairs=df.groupby(["PULocationID","DOLocationID"]).size().nlargest(500).index
-    df=df[df.set_index(["PULocationID","DOLocationID"]).index.isin(top_pairs)].reset_index(drop=True)
-
     df=df[(df["passenger_count"]==1) | (df["passenger_count"]==2)]
     df=df[(df["trip_distance"]>0) & (df["trip_distance"]<=20)]
     df=df[df["RatecodeID"]==1]
