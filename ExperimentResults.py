@@ -5,13 +5,13 @@ comm = MPI.COMM_WORLD
 nprocs = comm.Get_size()
 rank   = comm.Get_rank()
 
-# actvList  = ["relu", "tanh", "sigmoid"]
-# batchSizeList = [32, 64, 128, 256, 512, 1024]
-# hiddenDimList = [32, 64, 128, 256, 512]
+actvList = ["relu", "tanh", "sigmoid"]
+batchSizeList = [16, 32, 64, 128, 256]
+hiddenDimList = [16, 32, 48]
 
-actvList = ["relu"]
-batchSizeList = [32]
-hiddenDimList = [16]
+# actvList = ["relu"]
+# batchSizeList = [32]
+# hiddenDimList = [16]
 
 dfResult = None
 lossHistoryDict = dict()
@@ -46,7 +46,8 @@ for actv in actvList:
 inputDirectory  =  './processedData/'
 outputDirectory =  './trainingOutcome/'
 
-rowLimit = None
+
+rowLimit = None # use None to load all data 
 
 if __name__ == '__main__':
 
@@ -62,7 +63,7 @@ if __name__ == '__main__':
     for i, par in enumerate(paramList):
         timeElapsed , lossHistory = np.empty(2, np.float32) , list()
         modelList[i].fit(Xtrain, ytrain, lr, par[2], seed, threshold, 
-                        mseCycle, timeElapsed, lossHistory)
+                        mseCycle, timeElapsed, lossHistory, estimateMSE=True, totalEstiSize=524288)
         lossHistoryDict[i]= [float(_) for _ in lossHistory]
         testMSE  = modelList[i].calculateLoss(Xtest, ytest)
         if rank == 0:

@@ -118,7 +118,7 @@ class nn1Layer():
 
         return  grad0 , grad1
 
-    def fit(self, Xtrain, ytrain, learningRates, totalBatchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=3.0):
+    def fit(self, Xtrain, ytrain, learningRates, totalBatchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], estimateMSE=False, totalEstiSize=524288, timestampMse=3.0):
         """
         Train the model with SGD and store loss history & training time to references passed in. 
         Input: comm configs, training set, learning rates, width, initial params random seed, 
@@ -130,7 +130,7 @@ class nn1Layer():
         
         self.initializeWeights( seed)
 
-        estiSize= min(Xtrain.shape[0], int(524288/self.nprocs))
+        estiSize= min(Xtrain.shape[0], int(totalEstiSize/self.nprocs))
         batchSize= int(totalBatchSize/ self.nprocs)
 
         grad0 = np.zeros(self.w0.shape, dtype=np.float32)
@@ -143,7 +143,7 @@ class nn1Layer():
 
         s = 0
         t = 0
-        l =16
+        l = 30
         tolerance = int(l *threshold)
         convergence = 0
         timeRecorded= 0
@@ -163,7 +163,7 @@ class nn1Layer():
 
             if t == cycle:
 
-                mse = self.calculateLoss(Xtrain, ytrain, False, estiSize)
+                mse = self.calculateLoss(Xtrain, ytrain, estimateMSE, estiSize)
 
                 if self.rank == 0:
                     monoIndicator[s]= lossTrack[-1] <=mse
