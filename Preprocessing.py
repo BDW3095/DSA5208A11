@@ -46,7 +46,7 @@ def preprocess_and_split(df):
     df=df.drop(columns=["tpep_pickup_datetime","tpep_dropoff_datetime"])
 
     df=df[(df['pickup_day'].between(1,7)) & (df['pickup_hour'].between(0,23))]
-    df=df[(df["duration_min"]>=5) & (df["duration_min"]<=60)]
+    df=df[(df["duration_min"]>0) & (df["duration_min"]<=60)]
 
     X_categorical=pd.get_dummies(df[categorical_columns].astype(str),dtype="int8")
     X_numeric=df[numeric_columns].astype("float32")
