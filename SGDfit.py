@@ -43,13 +43,18 @@ class nn1Layer():
 
         return yHat
 
-    def calculateLoss(self, X, y):
+    def calculateLoss(self, X, y, estimate=False, batchSize=None):
         """
         Input: data X, data y. Return the loss of current network. 
         """
-        yDelta= self.forwardBroadcast(X) - y
-        sse = np.zeros(1, np.float32) 
-        sse[0] = np.sum(yDelta**2)
+        if not estimate:
+            Xselect, yselect= X, y
+        else:
+            idx=np.random.randint(X.shape[0], size=batchSize)
+            Xselect, yselect= X[idx], y[idx]
+        yDelta = self.forwardBroadcast(Xselect) - yselect
+        sse  = np.zeros(1, np.float32) 
+        sse[0] = np.average(yDelta**2)
         sst = None
         if self.rank == 0:
             sst = np.empty(self.nprocs, np.float32)
@@ -57,8 +62,8 @@ class nn1Layer():
         
         mse = None
         if self.rank == 0:
-            mse = np.sum(sst) / X.shape[0]/ self.nprocs
-            print('{:07.5f}'.format(mse))
+            mse = np.sum(sst)/ self.nprocs
+            print( '{:07.5f}'.format(mse))
         return mse
 
     def initializeWeights(self, seed=None):
@@ -113,7 +118,7 @@ class nn1Layer():
 
         return  grad0 , grad1
 
-    def fit(self, Xtrain, ytrain, learningRates, batchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=3.0):
+    def fit(self, Xtrain, ytrain, learningRates, totalBatchSize, seed, threshold, cycle, timeElapsed=np.empty(2, np.float32), lossTrack=[], timestampMse=3.0):
         """
         Train the model with SGD and store loss history & training time to references passed in. 
         Input: comm configs, training set, learning rates, width, initial params random seed, 
@@ -125,10 +130,13 @@ class nn1Layer():
         
         self.initializeWeights( seed)
 
+        estiSize= min(Xtrain.shape[0], int(524288/self.nprocs))
+        batchSize= int(totalBatchSize/ self.nprocs)
+
         grad0 = np.zeros(self.w0.shape, dtype=np.float32)
         grad1 = np.zeros(self.w1.shape, dtype=np.float32)
 
-        initmse = self.calculateLoss(Xtrain, ytrain)
+        initmse= self.calculateLoss(Xtrain, ytrain)
 
         if self.rank == 0:
             lossTrack.append(initmse)
@@ -155,9 +163,10 @@ class nn1Layer():
 
             if t == cycle:
 
-                mse =  self.calculateLoss(Xtrain, ytrain)
+                mse = self.calculateLoss(Xtrain, ytrain, False, estiSize)
+
                 if self.rank == 0:
-                    monoIndicator[s] = lossTrack[-1]<=mse
+                    monoIndicator[s]= lossTrack[-1] <=mse
                     s = (s+1) % l
                     if np.sum(monoIndicator)>= tolerance:
                         convergence = 1
@@ -235,7 +244,7 @@ def trainAndReport(comm, nprocs, rank, Xtrain, ytrain, Xtest, ytest, params):
     actv      = str(params[0])
     hiddenDim = int(params[1])
     lr        = float(params[2]), float(params[3])
-    batchSize = int(int(params[4]) / nprocs)
+    batchSize = int(params[4])
     seed = None
     try: 
         seed  = int(params[5])
